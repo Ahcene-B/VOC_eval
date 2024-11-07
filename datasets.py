@@ -33,7 +33,7 @@ transform = pth_transforms.Compose(
 
 class ImageDataset:
     def __init__(self, image_path):
-        
+
         self.image_path = image_path
         self.name = image_path.split("/")[-1]
 
@@ -71,7 +71,7 @@ class Dataset:
             self.year = "2014"
             self.root_path = f"datasets/COCO/images/{dataset_set}{self.year}"
             self.sel20k = 'datasets/coco_20k_filenames.txt'
-            # JSON file constructed based on COCO train2014 gt 
+            # JSON file constructed based on COCO train2014 gt
             self.all_annfile = "datasets/COCO/annotations/instances_train2014.json"
             self.annfile = "datasets/instances_train2014_sel20k.json"
             if not os.path.exists(self.annfile):
@@ -85,6 +85,7 @@ class Dataset:
         self.name = f"{self.dataset_name}_{self.set}"
 
         # Build the dataloader
+        print(self.root_path)
         if "VOC" in dataset_name:
             self.dataloader = torchvision.datasets.VOCDetection(
                 self.root_path,
@@ -113,10 +114,10 @@ class Dataset:
         Load the image corresponding to the im_name
         """
         if "VOC" in self.dataset_name:
-            image = skimage.io.imread(f"/datasets_local/VOC{self.year}/JPEGImages/{im_name}")
+            image = skimage.io.imread(f"datasets_local/VOC{self.year}/JPEGImages/{im_name}")
         elif "COCO" in self.dataset_name:
             im_path = self.path_20k[self.sel_20k.index(im_name)]
-            image = skimage.io.imread(f"/datasets_local/COCO/images/{im_path}")
+            image = skimage.io.imread(f"datasets_local/COCO/images/{im_path}")
         else:
             raise ValueError("Unkown dataset.")
         return image
@@ -279,7 +280,7 @@ def extract_gt_VOC(targets, remove_hards=False):
     return np.asarray(gt_bbxs), gt_clss
 
 
-def bbox_iou(box1, box2, x1y1x2y2=True, GIoU=False, DIoU=False, CIoU=False, eps=1e-7):
+def bbox_iou(box1, box2, x1y1x2y2=True, GIoU=False, DIoU=False, CIoU=False, eps=1e-7, split=False):
     # https://github.com/ultralytics/yolov5/blob/develop/utils/general.py
     # Returns the IoU of box1 to box2. box1 is 4, box2 is nx4
     box2 = box2.T
@@ -330,6 +331,8 @@ def bbox_iou(box1, box2, x1y1x2y2=True, GIoU=False, DIoU=False, CIoU=False, eps=
         else:  # GIoU https://arxiv.org/pdf/1902.09630.pdf
             c_area = cw * ch + eps  # convex area
             return iou - (c_area - union) / c_area  # GIoU
+    elif split:
+        return inter,union
     else:
         return iou  # IoU
 
