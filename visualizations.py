@@ -21,7 +21,7 @@ from PIL import Image
 
 import matplotlib.pyplot as plt
 
-def visualize_predictions(image, pred, seed, scales, dims, vis_folder, im_name, plot_seed=False):
+def visualize_predictions(image, pred, seed, scales, dims, vis_folder, im_name, plot_seed=False,gt_bbxs=None):
     """
     Visualization of the predicted box and the corresponding seed patch.
     """
@@ -34,6 +34,16 @@ def visualize_predictions(image, pred, seed, scales, dims, vis_folder, im_name, 
         (int(pred[2]), int(pred[3])),
         (255, 0, 0), 3,
     )
+
+
+    if gt_bbxs is not None:
+        for bx in gt_bbxs:
+            cv2.rectangle(
+                image,
+                (int(bx[0]), int(bx[1])),
+                (int(bx[2]), int(bx[3])),
+                (0, 255, 0), 3,
+            )
 
     # Plot the seed
     if plot_seed:
@@ -48,11 +58,11 @@ def visualize_predictions(image, pred, seed, scales, dims, vis_folder, im_name, 
 
     pltname = f"{vis_folder}/LOST_{im_name}.png"
     Image.fromarray(image).save(pltname)
-    print(f"Predictions saved at {pltname}.")
+    #print(f"Predictions saved at {pltname}.")
 
 def visualize_fms(A, seed, scores, dims, scales, output_folder, im_name):
     """
-    Visualization of the maps presented in Figure 2 of the paper. 
+    Visualization of the maps presented in Figure 2 of the paper.
     """
     w_featmap, h_featmap = dims
 
@@ -97,7 +107,7 @@ def visualize_fms(A, seed, scores, dims, scales, output_folder, im_name):
 
 def visualize_seed_expansion(image, pred, seed, pred_seed, scales, dims, vis_folder, im_name):
     """
-    Visualization of the seed expansion presented in Figure 3 of the paper. 
+    Visualization of the seed expansion presented in Figure 3 of the paper.
     """
     w_featmap, h_featmap = dims
 

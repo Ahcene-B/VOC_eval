@@ -72,7 +72,7 @@ if __name__ == "__main__":
         help="If want to apply only on one image, give file path.",
     )
 
-    # Folder used to output visualizations and 
+    # Folder used to output visualizations and
     parser.add_argument(
         "--output_dir", type=str, default="outputs", help="Output directory to store predictions and visualizations."
     )
@@ -156,7 +156,7 @@ if __name__ == "__main__":
 
     print(f"Running LOST on the dataset {dataset.name} (exp: {exp_name})")
 
-    # Visualization 
+    # Visualization
     if args.visualize:
         vis_folder = f"{args.output_dir}/visualizations/{exp_name}"
         os.makedirs(vis_folder, exist_ok=True)
@@ -166,7 +166,7 @@ if __name__ == "__main__":
     preds_dict = {}
     cnt = 0
     corloc = np.zeros(len(dataset.dataloader))
-    
+
     pbar = tqdm(dataset.dataloader)
     for im_id, inp in enumerate(pbar):
 
@@ -306,11 +306,11 @@ if __name__ == "__main__":
                     scales=scales,
                     initial_im_size=init_image_size[1:],
                 )
-                visualize_seed_expansion(image, pred, seed, pred_seed, scales, [w_featmap, h_featmap], vis_folder, im_name)
+                visualize_seed_expansion(image, pred, seed, pred_seed, scales, [w_featmap, h_featmap], vis_folder, im_name,)
 
             elif args.visualize == "pred":
                 image = dataset.load_image(im_name)
-                visualize_predictions(image, pred, seed, scales, [w_featmap, h_featmap], vis_folder, im_name)
+                visualize_predictions(image, pred, seed, scales, [w_featmap, h_featmap], vis_folder, im_name, gt_bbxs=gt_bbxs)
 
         # Save the prediction
         preds_dict[im_name] = pred
@@ -327,7 +327,8 @@ if __name__ == "__main__":
 
         cnt += 1
         if cnt % 50 == 0:
-            pbar.set_description(f"Found {int(np.sum(corloc))}/{cnt}")
+#            pbar.set_description(f"Found {int(np.sum(corloc))}/{cnt}")
+            pbar.set_description("Found {:.1f}@{:d}".format(100*np.sum(corloc)/cnt,cnt))
 
 
     # Save predicted bounding boxes

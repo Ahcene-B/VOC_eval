@@ -114,10 +114,10 @@ class Dataset:
         Load the image corresponding to the im_name
         """
         if "VOC" in self.dataset_name:
-            image = skimage.io.imread(f"datasets_local/VOC{self.year}/JPEGImages/{im_name}")
+            image = skimage.io.imread(f"datasets/VOC{self.year}/VOCdevkit/VOC{self.year}/JPEGImages/{im_name}")
         elif "COCO" in self.dataset_name:
             im_path = self.path_20k[self.sel_20k.index(im_name)]
-            image = skimage.io.imread(f"datasets_local/COCO/images/{im_path}")
+            image = skimage.io.imread(f"datasets/COCO/images/{im_path}")
         else:
             raise ValueError("Unkown dataset.")
         return image
@@ -278,6 +278,42 @@ def extract_gt_VOC(targets, remove_hards=False):
         gt_bbxs.append(x1y1x2y2)
 
     return np.asarray(gt_bbxs), gt_clss
+
+
+def iou_cell(cell, gt_box, eps=1e-7, split=False):
+    n = len(gt_box.shape)
+    mask = torch.zeros( n, *list(cell.shape))
+    for i in range(n):
+        x1,y1, x2,y2 = gt_box[i]
+        mask[n,x1:x2] += 1
+        mask[n,:,y1:y2] += 1
+        mask[n] = torch.clamp(mask,0,1)
+        mask[n] = mask[n] + cell
+    mask = mask.flatten(1)
+    iou = (mask>1).sum(-1) / (mask>0).sum(-1)
+
+    return iou
+
+
+def iou_box(p_box, gt_box, shape, eps=1e-7, split=False):
+    box  = torch.zeros( shape )
+    x1,y1, x2,y2 = box
+    box[x1:x2] += 1
+    box[:,y1:y2] += 1
+    box = torch.clamp(box,0,1)
+
+    n = len(gt_box.shape)
+    mask = torch.zeros( n, *list(box.shape))
+    for i in range(n):
+        x1,y1, x2,y2 = gt_box[i]
+        mask[n,x1:x2] += 1
+        mask[n,:,y1:y2] += 1
+        mask[n] = torch.clamp(mask,0,1)
+        mask[n] = mask[n] + box
+    mask = mask.flatten(1)
+    iou = (mask>1).sum(-1) / (mask>0).sum(-1)
+
+    return iou
 
 
 def bbox_iou(box1, box2, x1y1x2y2=True, GIoU=False, DIoU=False, CIoU=False, eps=1e-7, split=False):

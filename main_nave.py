@@ -382,7 +382,7 @@ if __name__ == "__main__":
         "--set",
         default="train",
         type=str,
-        choices=["val", "train", "trainval", "test"],
+        choices=["val", "train", "trainval", "test","person_val","person_train"],
         help="Path of the image to load.",
     )
     # Or use a single image
@@ -552,6 +552,77 @@ if __name__ == "__main__":
         # Evaluation
         if args.no_evaluation:
             continue
+        elif args.split_boxes:
+            # Compare prediction to GT boxes
+            all_ious = []
+            preds = []
+            for g_bbx in gt_bbxs:
+                t_gt = torch.from_numpy(g_bbx[None,:])
+                ious = []
+                for cc in feats:
+                    nnz = (cc>0).nonzero()
+                    ymin,ymax = nnz[0].min(),nnz[0].max()
+                    xmin,xmax = nnz[1].min(),nnz[1].max()
+                    box = np.array([xmin,ymin,xmax,ymax])
+                    iu = bbox_iou(torch.from_numpy(box), t_gt)
+                    ious.append( [_iu[0].item() for _iu in iu] )
+
+                all_ious.append( ious.max() )
+                ic = ious.argmax()
+                cc = feats[ic]
+                nnz = (cc>0).nonzero()
+                ymin,ymax = nnz[0].min(),nnz[0].max()
+                xmin,xmax = nnz[1].min(),nnz[1].max()
+                preds.append( np.array([xmin,ymin,xmax,ymax]) )
+
+
+            # Save the prediction
+            all_ious = np.array(all_ious)
+            corloc[ im_id ] = (all_ious > .5).mean()
+            preds_dict[im_name] = preds
+
+            # ------------ Visualizations -------------------------------------------
+            if args.visualize == "pred":
+                image = dataset.load_image(im_name)
+
+                h,w,_ = image.shape
+                _,hh,ww = img.shape
+                ph = (hh-h)//2
+                pw = (ww-w)//2
+
+                image = cv2.copyMakeBorder(image, ph, hh-h-ph, pw, ww-w-pw,
+                            cv2.BORDER_CONSTANT,value=[0,0,0])
+
+                msk = (cc[:,:,None]>0).astype(float)
+                msk = (msk+.5)/2
+                image = image * msk
+
+                image = image*(1-bords[:,:,None])
+                image[:,:,:2] = image[:,:,:2] + bords[:,:,None]*255
+
+                image = image.astype(np.uint8)
+
+                for bx in gt_bbxs:
+                    cv2.rectangle(
+                        image,
+                        (int(bx[0]), int(bx[1])),
+                        (int(bx[2]), int(bx[3])),
+                        (0, 255, 0), 1,
+                    )
+
+                for pred in preds:
+                    cv2.rectangle(
+                        image,
+                        (int(pred[0]), int(pred[1])),
+                        (int(pred[2]), int(pred[3])),
+                        (255, 0, 0), 1,
+                    )
+
+                pltname = f"{vis_folder}/NAVE_{im_name}.png"
+                Image.fromarray(image).save(pltname)
+            else:
+                raise NotImplementedError("Only pred visualization.")
+
         else:
             # Compare prediction to GT boxes
             t_gt = torch.from_numpy(gt_bbxs)
@@ -599,21 +670,20 @@ if __name__ == "__main__":
 
                 image = image.astype(np.uint8)
 
-                cv2.rectangle(
-                    image,
-                    (int(pred[0]), int(pred[1])),
-                    (int(pred[2]), int(pred[3])),
-                    (255, 0, 0), 3,
-                )
-
-
                 for bx in gt_bbxs:
                     cv2.rectangle(
                         image,
                         (int(bx[0]), int(bx[1])),
                         (int(bx[2]), int(bx[3])),
-                        (0, 255, 0), 3,
+                        (0, 255, 0), 1,
                     )
+
+                cv2.rectangle(
+                    image,
+                    (int(pred[0]), int(pred[1])),
+                    (int(pred[2]), int(pred[3])),
+                    (255, 0, 0), 1,
+                )
 
 
                 pltname = f"{vis_folder}/NAVE_{im_name}.png"
