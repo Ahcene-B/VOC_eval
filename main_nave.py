@@ -521,7 +521,8 @@ if __name__ == "__main__":
         img = paded
 
         # Move to gpu
-        img = img.cuda(non_blocking=True)
+        if CUDA:
+            img = img.cuda(non_blocking=True)
         # Size for transformers
         w_featmap = img.shape[-2] // args.patch_size
         h_featmap = img.shape[-1] // args.patch_size
