@@ -428,6 +428,9 @@ if __name__ == "__main__":
     parser.add_argument('-P','--projector', type=str, default='km',
                     help="Projection method: Kmeans (km) or PCA (pca).")
 
+    # Custom
+    parser.add_argument("--split_boxes", action="store_true", help="IoU splits the boxes.")
+
     args = parser.parse_args()
 
     if args.image_path is not None:
