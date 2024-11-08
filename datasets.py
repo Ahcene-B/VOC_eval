@@ -246,7 +246,7 @@ def extract_gt_COCO(targets, remove_iscrowd=True):
         x1y1x2y2 = [int(round(x)) for x in x1y1x2y2]
         gt_bbxs.append(x1y1x2y2)
 
-    return np.asarray(gt_bbxs), gt_clss
+    return np.asarray(gt_bbxs), np.asarray(gt_clss)
 
 
 def extract_gt_VOC(targets, remove_hards=False):
@@ -277,18 +277,18 @@ def extract_gt_VOC(targets, remove_hards=False):
         x1y1x2y2[1] -= 1
         gt_bbxs.append(x1y1x2y2)
 
-    return np.asarray(gt_bbxs), gt_clss
+    return np.asarray(gt_bbxs), np.asarray(gt_clss)
 
 
 def iou_cell(cell, gt_box, eps=1e-7, split=False):
-    n = len(gt_box.shape)
+    n = len(gt_box)
     mask = torch.zeros( n, *list(cell.shape))
     for i in range(n):
         x1,y1, x2,y2 = gt_box[i]
-        mask[n,x1:x2] += 1
-        mask[n,:,y1:y2] += 1
-        mask[n] = torch.clamp(mask,0,1)
-        mask[n] = mask[n] + cell
+        mask[i,:,x1:x2] += 1
+        mask[i,y1:y2] += 1
+        mask[i] = torch.clamp(mask[i],0,1)
+        mask[i] = mask[i] + cell
     mask = mask.flatten(1)
     iou = (mask>1).sum(-1) / (mask>0).sum(-1)
 
@@ -306,10 +306,10 @@ def iou_box(p_box, gt_box, shape, eps=1e-7, split=False):
     mask = torch.zeros( n, *list(box.shape))
     for i in range(n):
         x1,y1, x2,y2 = gt_box[i]
-        mask[n,x1:x2] += 1
-        mask[n,:,y1:y2] += 1
-        mask[n] = torch.clamp(mask,0,1)
-        mask[n] = mask[n] + box
+        mask[i,:,x1:x2] += 1
+        mask[i,y1:y2] += 1
+        mask[i] = torch.clamp(mask[i],0,1)
+        mask[i] = mask[i] + box
     mask = mask.flatten(1)
     iou = (mask>1).sum(-1) / (mask>0).sum(-1)
 

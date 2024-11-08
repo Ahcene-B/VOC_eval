@@ -51,7 +51,7 @@ def get_model(arch, patch_size, resnet_dilate, device):
         p.requires_grad = False
 
     # Initialize model with pretraining
-    if "imagenet" not in arch:
+    if "imagenet" not in arch and 'random' not in arch:
         url = None
         if arch == "vit_small" and patch_size == 16:
             url = "dino_deitsmall16_pretrain/dino_deitsmall16_pretrain.pth"

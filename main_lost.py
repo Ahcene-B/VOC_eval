@@ -113,6 +113,11 @@ if __name__ == "__main__":
     parser.add_argument("--dinoseg", action="store_true", help="Apply DINO-seg baseline.")
     parser.add_argument("--dinoseg_head", type=int, default=4)
 
+
+    # Custom
+    parser.add_argument("--split_boxes", action="store_true", help="IoU splits the boxes.")
+    parser.add_argument("--centered_boxes", action="store_true", help="Use smaller centered boxes to decided on the connected component.")
+
     args = parser.parse_args()
 
     if args.image_path is not None:
@@ -315,15 +320,27 @@ if __name__ == "__main__":
         # Save the prediction
         preds_dict[im_name] = pred
 
+        t_pred = torch.from_numpy(pred)
+
         # Evaluation
         if args.no_evaluation:
             continue
 
-        # Compare prediction to GT boxes
-        ious = bbox_iou(torch.from_numpy(pred), torch.from_numpy(gt_bbxs))
+        if args.split_boxes:
+            all_ious = []
+            for g_bbx in gt_bbxs:
+                t_gt = torch.from_numpy(g_bbx[None,:])
+                iu = bbox_iou(t_pred, t_gt)
+                all_ious.append( iu[0] )
 
-        if torch.any(ious >= 0.5):
-            corloc[im_id] = 1
+            corloc[im_id] = int(max(all_ious) > .5)
+
+        else:
+            # Compare prediction to GT boxes
+            ious = bbox_iou(t_pred, torch.from_numpy(gt_bbxs))
+
+            if torch.any(ious >= 0.5):
+                corloc[im_id] = 1
 
         cnt += 1
         if cnt % 50 == 0:
@@ -344,6 +361,7 @@ if __name__ == "__main__":
     if not args.no_evaluation:
         print(f"corloc: {100*np.sum(corloc)/cnt:.2f} ({int(np.sum(corloc))}/{cnt})")
         result_file = os.path.join(folder, 'results.txt')
-        with open(result_file, 'w') as f:
+        with open(result_file, 'a') as f:
+            print(args, file=f)
             f.write('corloc,%.1f,,\n'%(100*np.sum(corloc)/cnt))
         print('File saved at %s'%result_file)

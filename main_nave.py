@@ -25,7 +25,7 @@ from tqdm import tqdm
 from PIL import Image
 
 from networks import get_model
-from datasets import ImageDataset, Dataset, bbox_iou
+from datasets import ImageDataset, Dataset, bbox_iou, iou_cell, iou_box
 from visualizations import visualize_fms, visualize_predictions, visualize_seed_expansion
 from object_discovery import lost, detect_box, dino_seg
 
@@ -145,7 +145,7 @@ def get_PATH_VIT(image, model, layers):
     PATH = []
     S = []
 
-    #image = nn.Upsample(size=(224,224), mode='bicubic')(image)
+#    image = nn.Upsample(size=(224,224), mode='bicubic')(image)
 
     z = model.prepare_tokens(image)
 
@@ -273,10 +273,32 @@ def get_NAVE(
 
     if method == 'km':
         if CUDA:
+            if nb_clusters == -1:
+                iner = []
+                for kk in range(3,11):
+                    proj = KMeans(n_clusters=kk, init_method='kmeans++', max_iter=300, tol=1e-5)
+                    proj.fit(X)
+                    iner.append( ((X[:,None]-proj.centroids[None,:])**2).sum(-1).min(-1)[0].sum().item())
+                iner = np.array(iner)
+                iner = np.diff(iner)/iner[:-1]
+                nb_clusters = np.argmax(iner)+2
+#                nb_clusters += int(args.only_person)
+#                nb_clusters += int('resnet' in args.arch)
+
             proj    = KMeans(n_clusters=nb_clusters, init_method='kmeans++', max_iter=300, tol=1e-5)
             segmt = proj.fit_predict( X ).reshape( list(size)+[n_images] )
             segmt = segmt.detach().cpu().numpy()
         else:
+            if nb_clusters == -1:
+                iner = []
+                for kk in range(3,11):
+                    iner.append( KMeans(n_clusters=kk).fit(X).inertia_ )
+                iner = np.array(iner)
+                iner = np.diff(iner)/iner[:-1]
+                nb_clusters = np.argmax(iner)+2
+#                nb_clusters += int(args.only_person)
+#                nb_clusters += int('resnet' in args.arch)
+
             proj    = KMeans(n_clusters=nb_clusters)
             segmt = proj.fit_predict( X ).reshape( list(size)+[n_images] )
 
@@ -363,6 +385,7 @@ if __name__ == "__main__":
             "resnet50",
             "vgg16_imagenet",
             "resnet50_imagenet",
+            "resnet50_random",
         ],
         help="Model architecture.",
     )
@@ -423,13 +446,17 @@ if __name__ == "__main__":
     # For NAVE
     parser.add_argument("-L","--layers", nargs='+', type=int, default=[2, 3, 4],
                     help="A combination of desired layer activations to be used")
-    parser.add_argument('-K','--nb_clusters', type=int, default=5,
-                    help="Number of clusters used to compute the segmentation.")
+    parser.add_argument('-K','--nb_clusters', type=int, default=-1,
+                    help="Number of clusters used to compute the segmentation. If K=-1, the number of cluster is assessed from the inertia.")
     parser.add_argument('-P','--projector', type=str, default='km',
                     help="Projection method: Kmeans (km) or PCA (pca).")
 
     # Custom
     parser.add_argument("--split_boxes", action="store_true", help="IoU splits the boxes.")
+    parser.add_argument("--centered_boxes", action="store_true", help="Use smaller centered boxes to decide on the connected component boxes.")
+    parser.add_argument("--cc_as_boxes", action="store_true", help="Use connected components to decided on the connected component boxes.")
+
+    parser.add_argument("--only_person", action="store_true", help="Restrict the VOC to images with people.")
 
     args = parser.parse_args()
 
@@ -444,6 +471,9 @@ if __name__ == "__main__":
     if 'attn+' in args.projector:
         get_PATH_DINO = get_PATH_DINO_ATTN
         args.projector = args.projector[5:]
+
+    if args.centered_boxes or args.cc_as_boxes:
+        args.split_boxes = True
 
     # -------------------------------------------------------------------------------------------------------
     # Dataset
@@ -485,6 +515,9 @@ if __name__ == "__main__":
         elif "vit" in args.arch:
             exp_name += f"{args.patch_size}"
 
+    if args.only_person:
+        exp_name += f"_only-people"
+
     print(f"Running NAVE on the dataset {dataset.name} (exp: {exp_name})")
     print(f"Projector: {args.projector}, Layers: {args.layers}, Nb Clusters {args.nb_clusters}.")
 
@@ -497,7 +530,7 @@ if __name__ == "__main__":
     # Loop over images
     preds_dict = {}
     cnt = 0
-    corloc = np.zeros(len(dataset.dataloader))
+    corloc = [] #np.zeros(len(dataset.dataloader))
 
     pbar = tqdm(dataset.dataloader)
     for im_id, inp in enumerate(pbar):
@@ -533,15 +566,65 @@ if __name__ == "__main__":
         # ------------ GROUND-TRUTH -------------------------------------------
         if not args.no_evaluation:
             gt_bbxs, gt_cls = dataset.extract_gt(inp[1], im_name)
+            gt_ratio = []
+            n_bx = len(gt_bbxs)
 
             if gt_bbxs is not None:
+                if args.only_person:
+                    if 'person' not in gt_cls:
+                        continue
+                    else:
+                        gt_bbxs = gt_bbxs[gt_cls=='person']
+                        gt_cls  = gt_cls[gt_cls=='person']
+
                 # Discard images with no gt annotations
                 # Happens only in the case of VOC07 and VOC12
                 if gt_bbxs.shape[0] == 0 and args.no_hard:
                     continue
 
+                # Skipping is bad.
+#                skip = False
+                _,h,w = img.shape
+                for (x1,y1, x2,y2) in gt_bbxs:
+                    gt_ratio.append(max((x2-x1)/h , (y2-y1)/w))
+#                    if gt_ratio[-1] > .8:
+#                        skip = True
+#                        break
+#                if skip:
+#                    continue
+
+
         # ------------ EXTRACT FEATURES -------------------------------------------
         with torch.no_grad():
+
+            # vit_small17 + dino + Layers [11]
+            # No skip + K=3 + min/max Box: 64.25
+            # No skip + K=4 + min/max Box: 72.01
+            # No skip + K=5 + min/max Box: 75.13
+            # No skip + K=6 + min/max Box: 75.77
+            # No skip + K=7 + min/max Box: 76.45
+            # No skip + K=8 + min/max Box: 73.13
+            # No skip + K=10+ min/max Box: 68.97
+            # No skip + Trained nb_clusters(+1) + min/max Box: 71.65
+            # No skip + Trained nb_clusters(+2) + min/max Box: 72.17
+            # No skip + Trained nb_clusters(+3) + min/max Box: 72.77
+            # No skip + Heuristic nb_clusters + min/max Box: 74.25
+
+            # No skip + K=3 + centered Box: 64.25
+            # No skip + K=4 + centered Box: 72.09
+            # No skip + K=5 + centered Box: 73.69
+            # No skip + K=6 + centered Box: 75.41
+            # No skip + K=7 + centered Box: 73.17
+            # No skip + K=8 + centered Box: 73.17
+            # No skip + K=10+ centered Box: 69.09
+            # No skip + Trained nb_clusters(+1) + centered Box: 70.45
+            # No skip + Trained nb_clusters(+2) + centered Box: 73.17
+            # No skip + Trained nb_clusters(+3) + centered Box: 73.25
+            # No skip + Heuristic nb_clusters + centered Box: 75.25
+
+            if args.nb_clusters == -2:
+                args.nb_clusters = int( 11 - min(.8,np.max(gt_ratio))*10 )
+
             sppx = get_NAVE( img[None,:],
                                         model,
                                         get_PATH,
@@ -552,38 +635,65 @@ if __name__ == "__main__":
             # Split sppx per connected component
             bords = get_BORD(sppx[0])
             feats = get_CC(sppx[0])
+            n_cc = len(feats)
 
         # Evaluation
         if args.no_evaluation:
             continue
         elif args.split_boxes:
             # Compare prediction to GT boxes
-            all_ious = []
-            preds = []
-            for g_bbx in gt_bbxs:
-                t_gt = torch.from_numpy(g_bbx[None,:])
-                ious = []
-                for cc in feats:
-                    nnz = (cc>0).nonzero()
-                    ymin,ymax = nnz[0].min(),nnz[0].max()
-                    xmin,xmax = nnz[1].min(),nnz[1].max()
-                    box = np.array([xmin,ymin,xmax,ymax])
-                    iu = bbox_iou(torch.from_numpy(box), t_gt)
-                    ious.append( [_iu[0].item() for _iu in iu] )
-
-                all_ious.append( ious.max() )
-                ic = ious.argmax()
-                cc = feats[ic]
+            cc_bbx = []
+            for cc in feats:
                 nnz = (cc>0).nonzero()
+
+                if args.centered_boxes:
+                    # Centered Box
+                    xs = int(np.median(nnz[1]))
+                    ys = int(np.median(nnz[0]))
+
+                    xd = int(np.min([np.abs(xs-nnz[1].min()),np.abs(xs-nnz[1].max())]))
+                    yd = int(np.min([np.abs(ys-nnz[0].min()),np.abs(ys-nnz[0].max())]))
+
+                    xmin = np.clip(xs-xd,0,cc.shape[1])
+                    xmax = np.clip(xs+xd,0,cc.shape[1])
+                    ymin = np.clip(ys-yd,0,cc.shape[0])
+                    ymax = np.clip(ys+yd,0,cc.shape[0])
+                else:
+                    xmin,xmax = nnz[1].min(),nnz[1].max()
+                    ymin,ymax = nnz[0].min(),nnz[0].max()
+
+                cc_bbx.append( np.array([xmin,ymin,xmax,ymax]) )
+
+            all_ious = torch.zeros((n_bx,n_cc))
+
+            t_gt = torch.from_numpy(gt_bbxs)
+            for ic in range(n_cc):
+                if args.cc_as_boxes:
+                    all_ious[:,ic] = iou_cell(torch.from_numpy(feats[ic]), t_gt)
+                else:
+                    all_ious[:,ic] = bbox_iou(torch.from_numpy(cc_bbx[ic]), t_gt)
+
+            # Get the best
+            ax = all_ious.argmax().item()
+            ib,ic = ax//n_cc, ax%n_cc
+
+            # Get the IoU between the correct boxes
+            if args.centered_boxes or args.cc_as_boxes:
+                nnz = (feats[ic]>0).nonzero()
                 ymin,ymax = nnz[0].min(),nnz[0].max()
                 xmin,xmax = nnz[1].min(),nnz[1].max()
-                preds.append( np.array([xmin,ymin,xmax,ymax]) )
 
+                pred   = np.array([xmin,ymin,xmax,ymax])
+                target = gt_bbxs[ib]
+                iou    = bbox_iou(torch.from_numpy(pred), torch.from_numpy(target[None,:]))[0].item()
+            else:
+                pred   = cc_bbx[ic]
+                target = gt_bbxs[ib][None,:]
+                iou    = all_ious[ib,ic].item()
 
             # Save the prediction
-            all_ious = np.array(all_ious)
-            corloc[ im_id ] = (all_ious > .5).mean()
-            preds_dict[im_name] = preds
+            corloc.append( (iou > .5)+0 )
+            preds_dict[im_name] = pred
 
             # ------------ Visualizations -------------------------------------------
             if args.visualize == "pred":
@@ -597,7 +707,7 @@ if __name__ == "__main__":
                 image = cv2.copyMakeBorder(image, ph, hh-h-ph, pw, ww-w-pw,
                             cv2.BORDER_CONSTANT,value=[0,0,0])
 
-                msk = (cc[:,:,None]>0).astype(float)
+                msk = (feats[ic][:,:,None]>0).astype(float)
                 msk = (msk+.5)/2
                 image = image * msk
 
@@ -611,21 +721,33 @@ if __name__ == "__main__":
                         image,
                         (int(bx[0]), int(bx[1])),
                         (int(bx[2]), int(bx[3])),
-                        (0, 255, 0), 1,
+                        (0, 0, 255), 1,
                     )
 
-                for pred in preds:
-                    cv2.rectangle(
-                        image,
-                        (int(pred[0]), int(pred[1])),
-                        (int(pred[2]), int(pred[3])),
-                        (255, 0, 0), 1,
-                    )
+                cv2.rectangle(
+                    image,
+                    (int(target[0]), int(target[1])),
+                    (int(target[2]), int(target[3])),
+                    (0, 255, 0), 2,
+                )
+
+                cv2.rectangle(
+                    image,
+                    (int(pred[0]), int(pred[1])),
+                    (int(pred[2]), int(pred[3])),
+                    (255, 0, 0), 2,
+                )
 
                 pltname = f"{vis_folder}/NAVE_{im_name}.png"
                 Image.fromarray(image).save(pltname)
-            else:
-                raise NotImplementedError("Only pred visualization.")
+#            else:
+#                raise NotImplementedError("Only pred visualization.")
+
+            cnt += 1
+            if cnt % 50 == 0:
+                pbar.set_description("Found {:.1f}@{:d}".format(100*np.mean(corloc),cnt))
+                print()
+
 
         else:
             # Compare prediction to GT boxes
@@ -633,25 +755,27 @@ if __name__ == "__main__":
             ious = []
             for cc in feats:
                 nnz = (cc>0).nonzero()
-                ymin,ymax = nnz[0].min(),nnz[0].max()
                 xmin,xmax = nnz[1].min(),nnz[1].max()
+                ymin,ymax = nnz[0].min(),nnz[0].max()
+
                 box = np.array([xmin,ymin,xmax,ymax])
-                iu = bbox_iou(torch.from_numpy(box), t_gt, split=True)
-                ious.append( [_iu[0].item() for _iu in iu] )
+                iu = bbox_iou(torch.from_numpy(box), t_gt)
+                ious.append( [_iu.item() for _iu in iu] )
+
 
             ious = np.array(ious)
-            ic = (ious[:,0]/ious[:,1]).argmax()
-            if ious[ic,0]/ious[ic,1] >= 0.5:
-                corloc[im_id] = 1
+            ious = ious.max(-1)
+            ic = np.argmax(ious)
 
-            # Save the prediction
+            corloc.append( (ious[ic] >= 0.5)+0 )
+
             cc = feats[ic]
             nnz = (cc>0).nonzero()
             ymin,ymax = nnz[0].min(),nnz[0].max()
             xmin,xmax = nnz[1].min(),nnz[1].max()
             pred = np.array([xmin,ymin,xmax,ymax])
-
             preds_dict[im_name] = pred
+
 
             # ------------ Visualizations -------------------------------------------
             if args.visualize == "pred":
@@ -686,18 +810,19 @@ if __name__ == "__main__":
                     image,
                     (int(pred[0]), int(pred[1])),
                     (int(pred[2]), int(pred[3])),
-                    (255, 0, 0), 1,
+                    (255, 0, 0), 2,
                 )
 
 
                 pltname = f"{vis_folder}/NAVE_{im_name}.png"
                 Image.fromarray(image).save(pltname)
-            else:
-                raise NotImplementedError("Only pred visualization.")
+#            else:
+#                raise NotImplementedError("Only pred visualization.")
 
             cnt += 1
             if cnt % 50 == 0:
-                pbar.set_description("Found {:.1f}@{:d}".format(100*np.sum(corloc)/cnt,cnt))
+                pbar.set_description("Found {:.1f}@{:d}".format(100*np.mean(corloc),cnt))
+                print()
 
 
     # Save predicted bounding boxes
@@ -711,8 +836,9 @@ if __name__ == "__main__":
 
     # Evaluate
     if not args.no_evaluation:
-        print(f"corloc: {100*np.sum(corloc)/cnt:.2f} ({int(np.sum(corloc))}/{cnt})")
+        print(f"corloc: {100*np.mean(corloc):.2f} ({int(np.sum(corloc))}/{cnt})")
         result_file = os.path.join(folder, 'results.txt')
-        with open(result_file, 'w') as f:
+        with open(result_file, 'a') as f:
+            print( args, file=f)
             f.write('corloc,%.1f,,\n'%(100*np.sum(corloc)/cnt))
         print('File saved at %s'%result_file)
