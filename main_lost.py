@@ -118,6 +118,8 @@ if __name__ == "__main__":
     parser.add_argument("--split_boxes", action="store_true", help="IoU splits the boxes.")
     parser.add_argument("--centered_boxes", action="store_true", help="Use smaller centered boxes to decided on the connected component.")
 
+    parser.add_argument("--only_person", action="store_true", help="Restrict the VOC to images with people.")
+
     args = parser.parse_args()
 
     if args.image_path is not None:
@@ -159,6 +161,9 @@ if __name__ == "__main__":
         elif "vit" in args.arch:
             exp_name += f"{args.patch_size}_{args.which_features}"
 
+    if args.only_person:
+        exp_name += f"_only-people"
+
     print(f"Running LOST on the dataset {dataset.name} (exp: {exp_name})")
 
     # Visualization
@@ -197,7 +202,7 @@ if __name__ == "__main__":
         img = paded
 
         # Move to gpu
-        img = img.cuda(non_blocking=True)
+        img = img.to(device,non_blocking=True)
         # Size for transformers
         w_featmap = img.shape[-2] // args.patch_size
         h_featmap = img.shape[-1] // args.patch_size
@@ -207,6 +212,12 @@ if __name__ == "__main__":
             gt_bbxs, gt_cls = dataset.extract_gt(inp[1], im_name)
 
             if gt_bbxs is not None:
+                if args.only_person:
+                    if 'person' not in gt_cls:
+                        continue
+                    else:
+                        gt_bbxs = gt_bbxs[gt_cls=='person']
+                        gt_cls  = gt_cls[gt_cls=='person']
                 # Discard images with no gt annotations
                 # Happens only in the case of VOC07 and VOC12
                 if gt_bbxs.shape[0] == 0 and args.no_hard:

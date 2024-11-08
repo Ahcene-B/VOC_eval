@@ -381,6 +381,7 @@ if __name__ == "__main__":
         choices=[
             "vit_tiny",
             "vit_small",
+            "vit_small_random",
             "vit_base",
             "resnet50",
             "vgg16_imagenet",
@@ -444,9 +445,9 @@ if __name__ == "__main__":
 
 
     # For NAVE
-    parser.add_argument("-L","--layers", nargs='+', type=int, default=[2, 3, 4],
+    parser.add_argument("-L","--layers", nargs='+', type=int, default=[11],
                     help="A combination of desired layer activations to be used")
-    parser.add_argument('-K','--nb_clusters', type=int, default=-1,
+    parser.add_argument('-K','--nb_clusters', type=int, default=5,
                     help="Number of clusters used to compute the segmentation. If K=-1, the number of cluster is assessed from the inertia.")
     parser.add_argument('-P','--projector', type=str, default='km',
                     help="Projection method: Kmeans (km) or PCA (pca).")
@@ -567,7 +568,6 @@ if __name__ == "__main__":
         if not args.no_evaluation:
             gt_bbxs, gt_cls = dataset.extract_gt(inp[1], im_name)
             gt_ratio = []
-            n_bx = len(gt_bbxs)
 
             if gt_bbxs is not None:
                 if args.only_person:
@@ -597,31 +597,6 @@ if __name__ == "__main__":
         # ------------ EXTRACT FEATURES -------------------------------------------
         with torch.no_grad():
 
-            # vit_small17 + dino + Layers [11]
-            # No skip + K=3 + min/max Box: 64.25
-            # No skip + K=4 + min/max Box: 72.01
-            # No skip + K=5 + min/max Box: 75.13
-            # No skip + K=6 + min/max Box: 75.77
-            # No skip + K=7 + min/max Box: 76.45
-            # No skip + K=8 + min/max Box: 73.13
-            # No skip + K=10+ min/max Box: 68.97
-            # No skip + Trained nb_clusters(+1) + min/max Box: 71.65
-            # No skip + Trained nb_clusters(+2) + min/max Box: 72.17
-            # No skip + Trained nb_clusters(+3) + min/max Box: 72.77
-            # No skip + Heuristic nb_clusters + min/max Box: 74.25
-
-            # No skip + K=3 + centered Box: 64.25
-            # No skip + K=4 + centered Box: 72.09
-            # No skip + K=5 + centered Box: 73.69
-            # No skip + K=6 + centered Box: 75.41
-            # No skip + K=7 + centered Box: 73.17
-            # No skip + K=8 + centered Box: 73.17
-            # No skip + K=10+ centered Box: 69.09
-            # No skip + Trained nb_clusters(+1) + centered Box: 70.45
-            # No skip + Trained nb_clusters(+2) + centered Box: 73.17
-            # No skip + Trained nb_clusters(+3) + centered Box: 73.25
-            # No skip + Heuristic nb_clusters + centered Box: 75.25
-
             if args.nb_clusters == -2:
                 args.nb_clusters = int( 11 - min(.8,np.max(gt_ratio))*10 )
 
@@ -636,15 +611,16 @@ if __name__ == "__main__":
             bords = get_BORD(sppx[0])
             feats = get_CC(sppx[0])
             n_cc = len(feats)
+            n_bx = len(gt_bbxs)
 
         # Evaluation
         if args.no_evaluation:
             continue
         elif args.split_boxes:
             # Compare prediction to GT boxes
-            cc_bbx = []
-            for cc in feats:
-                nnz = (cc>0).nonzero()
+            cc_bbx = torch.zeros((n_cc,4))
+            for ic in range(n_cc):
+                nnz = (feats[ic]>0).nonzero()
 
                 if args.centered_boxes:
                     # Centered Box
@@ -654,15 +630,15 @@ if __name__ == "__main__":
                     xd = int(np.min([np.abs(xs-nnz[1].min()),np.abs(xs-nnz[1].max())]))
                     yd = int(np.min([np.abs(ys-nnz[0].min()),np.abs(ys-nnz[0].max())]))
 
-                    xmin = np.clip(xs-xd,0,cc.shape[1])
-                    xmax = np.clip(xs+xd,0,cc.shape[1])
-                    ymin = np.clip(ys-yd,0,cc.shape[0])
-                    ymax = np.clip(ys+yd,0,cc.shape[0])
+                    xmin = np.clip(xs-xd,0,size_im[1])
+                    xmax = np.clip(xs+xd,0,size_im[1])
+                    ymin = np.clip(ys-yd,0,size_im[0])
+                    ymax = np.clip(ys+yd,0,size_im[0])
                 else:
                     xmin,xmax = nnz[1].min(),nnz[1].max()
                     ymin,ymax = nnz[0].min(),nnz[0].max()
 
-                cc_bbx.append( np.array([xmin,ymin,xmax,ymax]) )
+                cc_bbx[ic] = torch.tensor([xmin,ymin,xmax,ymax])
 
             all_ious = torch.zeros((n_bx,n_cc))
 
@@ -671,7 +647,7 @@ if __name__ == "__main__":
                 if args.cc_as_boxes:
                     all_ious[:,ic] = iou_cell(torch.from_numpy(feats[ic]), t_gt)
                 else:
-                    all_ious[:,ic] = bbox_iou(torch.from_numpy(cc_bbx[ic]), t_gt)
+                    all_ious[:,ic] = bbox_iou(cc_bbx[ic], t_gt)
 
             # Get the best
             ax = all_ious.argmax().item()

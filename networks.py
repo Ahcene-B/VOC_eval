@@ -45,7 +45,7 @@ def get_model(arch, patch_size, resnet_dilate, device):
         else:
             model = vgg16(pretrained=False)
     else:
-        model = vits.__dict__[arch](patch_size=patch_size, num_classes=0)
+        model = vits.__dict__[arch.replace('_random','')](patch_size=patch_size, num_classes=0)
 
     for p in model.parameters():
         p.requires_grad = False
